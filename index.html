@@ -1,17 +1,4 @@
 <!DOCTYPE html>
-<script type="application/json" id="cowork-artifact-meta">
-{
-  "name": "Chargeback Reply Queue",
-  "schemaVersion": 1,
-  "description": "Live ShopeePay Thailand chargeback dashboard. Scans the last 14 days of bank-initiated Gmail threads (KBank, Krungsri, KTC, SCB, CardX, Bangkok Bank, KTB, UOB, AEON), counts incoming vs already-replied vs pending a Shopee reply, and lists the pending queue sorted by a priority score built from days silent, disputed amount, and urgency wording. Cross-matches case refs against Shopee-sent mail so replies made in a split Gmail thread count as answered.",
-  "mcpTools": [
-    "mcp__8e1bc061-bf0b-4f82-810e-33bbe2b34204__search_threads"
-  ],
-  "mcpServerNames": [
-    "Gmail"
-  ]
-}
-</script>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -67,7 +54,6 @@ tbody tr:hover { background:#fafbfc; }
 .dim { color:#9ca3af; }
 .aged { color:#b91c1c; font-weight:600; }
 .msg { padding:26px; text-align:center; color:#6b7280; }
-.warn { background:#fffbeb; border:1px solid #fde68a; color:#92400e; border-radius:8px; padding:9px 12px; font-size:12.5px; margin-bottom:14px; }
 .foot { margin-top:12px; font-size:11.5px; color:#9ca3af; line-height:1.6; }
 @media (max-width:720px){ .charts { grid-template-columns:1fr; } }
 </style>
@@ -75,15 +61,13 @@ tbody tr:hover { background:#fafbfc; }
 <body>
 
 <h1>Shopee L3 Payment - Chargeback Email Dashboard</h1>
-<div class="sub" id="sub">Loading from Gmail…</div>
-
-<div id="warn"></div>
+<div class="sub" id="sub">Loading Dashboard…</div>
 
 <div class="cards">
-  <div class="card"><div class="lbl">Incoming (14d)</div><div class="val" id="cIn">–</div><div class="note">bank-initiated threads</div></div>
-  <div class="card done"><div class="lbl">Already replied</div><div class="val" id="cRep">–</div><div class="note" id="cRepPct">Shopee sent last</div></div>
-  <div class="card pend"><div class="lbl">Pending Shopee</div><div class="val" id="cPen">–</div><div class="note" id="cPenPct">awaiting our reply</div></div>
-  <div class="card"><div class="lbl">High priority</div><div class="val" id="cHigh">–</div><div class="note" id="cAmt">of pending queue</div></div>
+  <div class="card"><div class="lbl">Incoming (14d)</div><div class="val" id="cIn">107</div><div class="note">bank-initiated threads</div></div>
+  <div class="card done"><div class="lbl">Already replied</div><div class="val" id="cRep">63</div><div class="note" id="cRepPct">59% of incoming</div></div>
+  <div class="card pend"><div class="lbl">Pending Shopee</div><div class="val" id="cPen">36</div><div class="note" id="cPenPct">34% of incoming · 8 FYI hidden</div></div>
+  <div class="card"><div class="lbl">High priority</div><div class="val" id="cHigh">0</div><div class="note" id="cAmt">฿3,188 parsed from subjects</div></div>
 </div>
 
 <div class="charts">
@@ -95,7 +79,7 @@ tbody tr:hover { background:#fafbfc; }
   <div class="bar">
     <div class="chips" id="priChips"></div>
     <div style="display:flex;gap:8px;align-items:center">
-      <span class="chip" id="naToggle" style="display:none"></span>
+      <span class="chip" id="naToggle">Show no-action · 8</span>
       <select id="bankSel"><option value="">All banks</option></select>
       <span class="dim" id="shown"></span>
     </div>
@@ -111,7 +95,7 @@ tbody tr:hover { background:#fafbfc; }
         <th data-k="last">Last msg</th>
         <th data-k="days" class="num">Days silent</th>
       </tr></thead>
-      <tbody id="tb"><tr><td colspan="7" class="msg">Loading…</td></tr></tbody>
+      <tbody id="tb"></tbody>
     </table>
   </div>
 </div>
@@ -119,219 +103,50 @@ tbody tr:hover { background:#fafbfc; }
 <div class="foot">
   Pending = the newest message in the thread came from a bank address, with no Shopee reply after it. Threads answered in a
   <em>separate</em> Gmail thread are matched back by case reference and counted as replied.
-  Amounts and case refs are parsed from subject lines — blank means the figure sits in the body or an attachment, not the subject.
-  Routine weekly fraud reports, Outlook recall notices and capacity/ops threads are excluded.
-  <br>FYI mail is filtered out of the pending count — ยืนยันการหักบัญชี, แจ้งหักบัญชี, แจ้งคืนเงิน, ผู้ถือบัตรยอมรับรายการ, and
-  bank acknowledgements ("documents received, forwarded to issuer"). Hit <strong>Show no-action</strong> to audit what was filtered.
-  A thread is kept in the queue regardless if the bank is still asking for something (ขออนุญาตตัดเงิน / ขอเอกสาร / ขอข้อมูลเพิ่มเติม / ขอความอนุเคราะห์).
-  Priority is scored from days silent, amount, and urgency wording (ครั้งที่ 2 / 2ND CHARGEBACK / urgent / ด่วน / arbitration / แพ้เคส).
 </div>
 
 <script>
-const GMAIL = "mcp__8e1bc061-bf0b-4f82-810e-33bbe2b34204__search_threads";
-const BANK_Q = "from:(kasikornbank.com OR krungsri.com OR ktc.co.th OR cardx.co.th OR scb.co.th OR bangkokbank.com OR ktb.co.th OR uob.co.th OR aeon.co.th) newer_than:14d";
-const SHOPEE_Q = "{to:chargeback@shopeepay.com from:chargeback@shopeepay.com cc:chargeback@shopeepay.com} from:(shopee.com OR shopeepay.com) newer_than:14d -in:draft";
-
-const BANKS = [
-  [/kasikornbank\.com/i, "KBank"],
-  [/krungsri\.com/i, "Krungsri"],
-  [/ktc\.co\.th/i, "KTC"],
-  [/cardx\.co\.th/i, "CardX"],
-  [/scb\.co\.th/i, "SCB"],
-  [/bangkokbank\.com/i, "Bangkok Bank"],
-  [/ktb\.co\.th/i, "KTB"],
-  [/uob\.co\.th/i, "UOB"],
-  [/aeon\.co\.th/i, "AEON"]
+// Mock Data for GitHub Pages Preview
+const MOCK_ROWS = [
+  { id: "1", bank: "SCB", ref: "5404...4669", subject: "RE: ผู้ถือบัตรปฏิเสธรายการเรียกเก็บ 1 รายการ 540492XXXXXX4669_SHOPEE_ ( THB. 1,362.00 )", amount: 1362, last: "2026-08-14", days: 6, score: 2, pri: "Low", na: null },
+  { id: "2", bank: "Krungsri", ref: "4999...8976", subject: "FW: โปรดตรวจสอบรายการปฏิเสธ ร้านค้า SHOPEETH บัตร 4999-60XX-XXXX-8976 จำนวนเงิน 1.00 บาท 1 รายการ (On-Us)", amount: 1, last: "2026-08-13", days: 7, score: 2, pri: "Low", na: null },
+  { id: "3", bank: "KBank", ref: "4417-1766", subject: "ตอบกลับ: ตอบกลับ: ตอบกลับ: ผู้ถือบัตร ยืนยันปฏิเสธรายการ ครั้งที่ 2 : โปรดตรวจสอบรายการปฏิเสธ_(4417-1766) NUCH (FOR SHOPEE) (บ.ช้อปปี้เพย์ (ประเทศไทย) จก.)_SR-45514032-1", amount: null, last: "2026-08-20", days: 0, score: 1, pri: "Low", na: null },
+  { id: "4", bank: "KBank", ref: "4715...8901", subject: "โปรดตรวจสอบรายการปฏิเสธ บัตร 4715-XXXX-XXXX-8901 จำนวนเงิน 500.00 บาท", amount: 500, last: "2026-08-18", days: 2, score: 1, pri: "Low", na: null },
+  { id: "5", bank: "Bangkok Bank", ref: "CASE.882109", subject: "CASE. 882109 ขอเอกสารเพิ่มเติมรายการปฏิเสธชำระเงิน", amount: 1325, last: "2026-08-16", days: 4, score: 2, pri: "Low", na: null },
+  { id: "6", bank: "SCB", ref: "SR-90123112", subject: "แจ้งยืนยันการหักบัญชีร้านค้าเรียบร้อยแล้ว SR-90123112", amount: null, last: "2026-08-19", days: 1, score: 0, pri: "Low", na: "ยืนยันการหักบัญชี" }
 ];
-const NOT_DISPUTE = /รายงาน Shopee Acquirer Fraud|Acquirer Fraud VISA|^Recall:|Daily Chargeback Action Report|Capacity Confirmation|Standby Support/i;
-const URGENT = /urgent|ด่วน|ครั้งที่\s*2|ครั้ง\s*ที่\s*2|รอบ\s*2|2ND CHARGEBACK|arbitration|follow\s*up|ทวง/i;
-const DEDUCT = /แพ้เคส|ตัดเงินร้านค้า|หักบัญชี|หักเงิน|deduction|debit/i;
 
-// Threads the bank sent purely as FYI — no reply owed by Shopee. Checked against subject + snippet.
-// Order matters: the first match supplies the reason label.
-const NO_ACTION = [
-  [/ยืนยันการหักบัญชี/,                                    "ยืนยันการหักบัญชี"],
-  [/แจ้งหักบัญชี/,                                          "แจ้งหักบัญชี"],
-  [/แจ้งคืนเงิน|ปรับปรุงคืนเงินเข้าบัญชีร้านค้า|นำเงินคืนผู้ถือบัตร/, "แจ้งคืนเงิน"],
-  [/ผู้ถือบัตรยอมรับรายการ|ผู้ถือบัตรได้ยอมรับรายการ/,        "ผู้ถือบัตรยอมรับรายการ"],
-  [/ธนาคารได้รับเอกสาร|ได้รับข้อมูลเอกสารจากท่าน|อยู่ระหว่างการยื่น|ยื่นเรื่องผ่านทาง Card Network|forwarded (it )?to the issuer|we have (received|forwarded)|acknowledge receipt/i, "bank acknowledgement"]
-];
-// Guard: a case where the bank is ASKING for something still needs a reply.
-const NEEDS_REPLY = /ขออนุญาตตัดเงิน|ขออนุญาตหักเงิน|ขอความอนุเคราะห์|ขอเอกสาร|ขอข้อมูลเพิ่มเติม|ขอทราบผล|โปรดจัดส่ง|กรุณาจัดส่ง|please (provide|send|submit)/i;
-
-// These subjects accumulate history: each new stage is prepended as another
-// "prefix :" segment, so the LEADING segment describes the current state and
-// everything after it is older context. Read the head first, then fall back.
-const REPLY_MARK = /^(?:\s*(?:Re|RE|Fwd|FW|FWD|ตอบกลับ)\s*:\s*)+/;
-function headOf(subject) {
-  const s = String(subject || "").replace(REPLY_MARK, "");
-  return s.includes(":") ? s.split(":")[0].trim() : null;
-}
-function match(text) { for (const [re, label] of NO_ACTION) if (re.test(text)) return label; return null; }
-
-function noActionOf(subject, snippet) {
-  const body = subject + " \n " + (snippet || "");
-  // 1. Newest prefix wins — "ยืนยันการหักบัญชี : <older stages…>" is settled,
-  //    even though an earlier stage in the same line asked for permission.
-  const head = headOf(subject);
-  if (head) { const h = match(head); if (h) return h; }
-  // 2. Otherwise an open request anywhere keeps it in the queue.
-  if (NEEDS_REPLY.test(body)) return null;
-  // 3. Fall back to FYI wording elsewhere in the subject or snippet.
-  return match(body);
-}
-
+let state = { pri: "Low", bank: "", showNA: false, sort: "score", dir: -1 };
 const $ = id => document.getElementById(id);
-let ALL = [], state = {
-  pri: localStorage.getItem("cb_pri") || "All",
-  bank: localStorage.getItem("cb_bank") || "",
-  showNA: localStorage.getItem("cb_na") === "1",
-  sort: "score", dir: -1
-};
 
-function isShopee(s) { return /shopee/i.test(s || ""); }
-function bankOf(s) { for (const [re, n] of BANKS) if (re.test(s || "")) return n; return "Other"; }
-
-function refOf(subj) {
-  const s = subj || "";
-  let m = s.match(/CASE\.\s?(\d{6,})/i);            if (m) return "CASE." + m[1];
-  m = s.match(/\(\s*(\d{4})\s*-\s*(\d{4})\s*\)/);   if (m) return m[1] + "-" + m[2];
-  m = s.match(/(SR-\d{6,}(?:-\d)?)/i);              if (m) return m[1].toUpperCase();
-  m = s.match(/(CB-\d{4,})/i);                      if (m) return m[1].toUpperCase();
-  m = s.match(/C\/N\s*(\d{4})-(\d{4})/i);           if (m) return m[1] + "-" + m[2];
-  m = s.match(/#(\d{3,5})\b/);                      if (m) return "#" + m[1];
-  m = s.match(/(\d{4})-?\d{2}[Xx]{2}-?[Xx]{4}-?(\d{4})/); if (m) return m[1] + "…" + m[2];
-  m = s.match(/\b(\d{4})-(\d{4})\b/);               if (m) return m[1] + "-" + m[2];
-  return "—";
-}
-// all refs in a subject, for cross-thread reply matching
-function allRefs(subj) {
-  const s = subj || "", out = new Set();
-  (s.match(/\b\d{4}\s*-\s*\d{4}\b/g) || []).forEach(x => out.add(x.replace(/\s/g, "")));
-  (s.match(/CASE\.\s?\d{6,}/gi) || []).forEach(x => out.add("CASE." + x.replace(/\D/g, "")));
-  (s.match(/SR-\d{6,}(?:-\d)?/gi) || []).forEach(x => out.add(x.toUpperCase()));
-  (s.match(/CB-\d{4,}/gi) || []).forEach(x => out.add(x.toUpperCase()));
-  (s.match(/#\d{3,5}\b/g) || []).forEach(x => out.add(x));
-  return out;
-}
-function amountOf(subj) {
-  const s = subj || "", vals = [];
-  const push = re => { let m; const r = new RegExp(re.source, "gi"); while ((m = r.exec(s))) vals.push(parseFloat(m[1].replace(/,/g, ""))); };
-  push(/THB\.?\s*([\d,]+\.\d{2})/);
-  push(/จำนวนเงิน\s*([\d,]+(?:\.\d{2})?)\s*บาท/);
-  push(/([\d,]+\.\d{2})\s*บาท/);
-  const ok = vals.filter(v => isFinite(v) && v > 0);
-  return ok.length ? Math.max(...ok) : null;
-}
-function daysBetween(iso) { return Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 864e5)); }
-
-function score(r) {
-  let s = 0;
-  if (r.days >= 10) s += 3; else if (r.days >= 7) s += 2; else if (r.days >= 4) s += 1;
-  const a = r.amount || 0;
-  if (a >= 10000) s += 3; else if (a >= 3000) s += 2; else if (a >= 1000) s += 1;
-  if (URGENT.test(r.subject)) s += 2;
-  if (DEDUCT.test(r.subject)) s += 1;
-  return s;
-}
-const priOf = s => s >= 6 ? "High" : s >= 3 ? "Medium" : "Low";
-
-async function call(name, args) {
-  const r = await window.cowork.callMcpTool(name, args);
-  if (r.isError) throw new Error((r.content && r.content[0] && r.content[0].text) || "tool error");
-  if (r.structuredContent) return r.structuredContent;
-  const t = r.content && r.content[0] && r.content[0].text;
-  if (!t) throw new Error("empty response");
-  return JSON.parse(t);
-}
-async function pages(query, max) {
-  const out = []; let token, n = 0;
-  do {
-    const a = { query, pageSize: 50, view: "THREAD_VIEW_MINIMAL" };
-    if (token) a.pageToken = token;
-    const d = await call(GMAIL, a);
-    (d.threads || []).forEach(t => out.push(t));
-    token = d.nextPageToken;
-  } while (token && ++n < max);
-  return out;
-}
-const latest = t => (t.messages || []).slice().sort((a, b) => (a.date || "").localeCompare(b.date || "")).pop();
-
-async function load() {
-  const [bankThreads, shopeeThreads] = await Promise.all([pages(BANK_Q, 8), pages(SHOPEE_Q, 8)]);
-
-  // index the newest Shopee message date per case ref (catches replies sent in a split thread)
-  const shopeeSeen = new Map();
-  shopeeThreads.forEach(t => (t.messages || []).forEach(m => {
-    if (!isShopee(m.sender)) return;
-    allRefs(m.subject).forEach(r => {
-      const p = shopeeSeen.get(r);
-      if (!p || (m.date || "") > p) shopeeSeen.set(r, m.date || "");
-    });
-  }));
-
-  const rows = [];
-  let incoming = 0, replied = 0;
-  bankThreads.forEach(t => {
-    const m = latest(t); if (!m) return;
-    const subject = m.subject || "(no subject)";
-    if (NOT_DISPUTE.test(subject)) return;
-    incoming++;
-    if (isShopee(m.sender)) { replied++; return; }
-    // answered in a different thread?
-    let answered = false;
-    allRefs(subject).forEach(r => { const d = shopeeSeen.get(r); if (d && d > (m.date || "")) answered = true; });
-    if (answered) { replied++; return; }
-    const row = {
-      id: t.id, bank: bankOf(m.sender), sender: m.sender || "", subject,
-      ref: refOf(subject), amount: amountOf(subject), last: (m.date || "").slice(0, 10),
-      days: daysBetween(m.date)
-    };
-    row.na = noActionOf(subject, m.snippet);
-    row.score = score(row); row.pri = priOf(row.score);
-    rows.push(row);
-  });
-
-  ALL = rows;
-  const act = rows.filter(r => !r.na), na = rows.length - act.length;
-  $("cIn").textContent = incoming;
-  $("cRep").textContent = replied;
-  $("cPen").textContent = act.length;
-  const pct = n => incoming ? Math.round(n * 100 / incoming) + "% of incoming" : "";
-  $("cRepPct").textContent = pct(replied);
-  $("cPenPct").textContent = pct(act.length) + (na ? " · " + na + " FYI hidden" : "");
-  $("cHigh").textContent = act.filter(r => r.pri === "High").length;
-  const tot = act.reduce((s, r) => s + (r.amount || 0), 0);
-  $("cAmt").textContent = tot ? "฿" + tot.toLocaleString(undefined, { maximumFractionDigits: 0 }) + " parsed from subjects" : "of pending queue";
-  $("sub").textContent = "Rolling 14 days · " + incoming + " bank threads scanned · refreshed " +
+function init() {
+  $("sub").textContent = "Rolling 14 days · 107 bank threads scanned · refreshed " +
     new Date().toLocaleString("en-GB", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" }) + " (Bangkok)";
 
-  const banks = [...new Set(act.map(r => r.bank))].sort();
-  $("bankSel").innerHTML = '<option value="">All banks</option>' + banks.map(b => `<option${b === state.bank ? " selected" : ""}>${b}</option>`).join("");
-  charts(replied, act, na);
-  render();
+  const banks = [...new Set(MOCK_ROWS.map(r => r.bank))].sort();
+  $("bankSel").innerHTML = '<option value="">All banks</option>' + banks.map(b => `<option>${b}</option>`).join("");
+
+  renderCharts();
+  renderTable();
 }
 
-let dChart, bChart;
-function charts(replied, rows, na) {
-  if (dChart) dChart.destroy(); if (bChart) bChart.destroy();
-  dChart = new Chart($("donut"), {
+function renderCharts() {
+  new Chart($("donut"), {
     type: "doughnut",
     data: {
       labels: ["Pending Shopee", "Already replied", "FYI / no action"],
-      datasets: [{ data: [rows.length, replied, na || 0], backgroundColor: ["#dc2626", "#16a34a", "#cbd5e1"], borderWidth: 0 }]
+      datasets: [{ data: [36, 63, 8], backgroundColor: ["#dc2626", "#16a34a", "#cbd5e1"], borderWidth: 0 }]
     },
     options: { responsive: true, maintainAspectRatio: false, cutout: "62%", plugins: { legend: { position: "bottom", labels: { boxWidth: 11, font: { size: 12 } } } } }
   });
-  const by = {}; rows.forEach(r => { by[r.bank] = by[r.bank] || { n: 0, high: 0 }; by[r.bank].n++; if (r.pri === "High") by[r.bank].high++; });
-  const ks = Object.keys(by).sort((a, b) => by[b].n - by[a].n);
-  bChart = new Chart($("bars"), {
+
+  new Chart($("bars"), {
     type: "bar",
     data: {
-      labels: ks,
+      labels: ["KBank", "Krungsri", "Bangkok Bank", "SCB", "KTC"],
       datasets: [
-        { label: "High", data: ks.map(k => by[k].high), backgroundColor: "#dc2626", borderRadius: 3 },
-        { label: "Other", data: ks.map(k => by[k].n - by[k].high), backgroundColor: "#fbbf24", borderRadius: 3 }
+        { label: "High", data: [0, 0, 0, 0, 0], backgroundColor: "#dc2626", borderRadius: 3 },
+        { label: "Other", data: [17, 9, 8, 1, 1], backgroundColor: "#fbbf24", borderRadius: 3 }
       ]
     },
     options: {
@@ -342,30 +157,19 @@ function charts(replied, rows, na) {
   });
 }
 
-function render() {
-  const base = state.showNA ? ALL : ALL.filter(r => !r.na);
-  $("priChips").innerHTML = ["All", "High", "Medium", "Low"].map(p => {
-    const n = p === "All" ? base.length : base.filter(r => r.pri === p).length;
-    return `<span class="chip${state.pri === p ? " on" : ""}" data-p="${p}">${p} · ${n}</span>`;
+function renderTable() {
+  const base = state.showNA ? MOCK_ROWS : MOCK_ROWS.filter(r => !r.na);
+  
+  $("priChips").innerHTML = ["All · 36", "High · 0", "Medium · 12", "Low · 24"].map(label => {
+    const p = label.split(" ")[0];
+    return `<span class="chip${state.pri === p ? " on" : ""}" data-p="${p}">${label}</span>`;
   }).join("");
-  $("priChips").querySelectorAll(".chip").forEach(c => c.onclick = () => {
-    state.pri = c.dataset.p; localStorage.setItem("cb_pri", state.pri); render();
-  });
 
-  const naCount = ALL.filter(r => r.na).length;
-  $("naToggle").textContent = (state.showNA ? "Hide" : "Show") + " no-action · " + naCount;
-  $("naToggle").className = "chip" + (state.showNA ? " on" : "");
-  $("naToggle").style.display = naCount ? "" : "none";
+  $("priChips").querySelectorAll(".chip").forEach(c => c.onclick = () => {
+    state.pri = c.dataset.p; renderTable();
+  });
 
   let rows = base.filter(r => (state.pri === "All" || r.pri === state.pri) && (!state.bank || r.bank === state.bank));
-  const k = state.sort;
-  rows.sort((a, b) => {
-    let x = a[k], y = b[k];
-    if (k === "amount") { x = x || -1; y = y || -1; }
-    if (typeof x === "number") return (x - y) * state.dir;
-    return String(x).localeCompare(String(y)) * state.dir;
-  });
-  if (k === "score") rows.sort((a, b) => b.score - a.score || (b.amount || 0) - (a.amount || 0));
 
   $("shown").textContent = rows.length + " shown";
   $("tb").innerHTML = rows.length ? rows.map(r => `
@@ -373,27 +177,19 @@ function render() {
       <td>${r.na ? '<span class="pri FYI">FYI</span>' : `<span class="pri ${r.pri}">${r.pri}</span>`}</td>
       <td>${r.bank}</td>
       <td class="ref">${r.ref}</td>
-      <td class="subj"><a href="https://mail.google.com/mail/u/0/#all/${r.id}" target="_blank" rel="noopener">${esc(r.subject)}</a>${r.na ? ` <span class="naTag">${esc(r.na)}</span>` : ""}</td>
+      <td class="subj"><a href="#">${esc(r.subject)}</a>${r.na ? ` <span class="naTag">${esc(r.na)}</span>` : ""}</td>
       <td class="num">${r.amount ? r.amount.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '<span class="dim">—</span>'}</td>
       <td class="dim">${r.last}</td>
       <td class="num ${r.days >= 7 ? "aged" : ""}">${r.days}</td>
-    </tr>`).join("") : '<tr><td colspan="7" class="msg">Nothing pending in this filter — nice.</td></tr>';
+    </tr>`).join("") : '<tr><td colspan="7" class="msg">Nothing pending in this filter.</td></tr>';
 }
+
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
-document.querySelectorAll("th").forEach(th => th.onclick = () => {
-  const k = th.dataset.k;
-  state.dir = state.sort === k ? -state.dir : (k === "bank" || k === "ref" || k === "subject" ? 1 : -1);
-  state.sort = k; render();
-});
-$("bankSel").onchange = e => { state.bank = e.target.value; localStorage.setItem("cb_bank", state.bank); render(); };
-$("naToggle").onclick = () => { state.showNA = !state.showNA; localStorage.setItem("cb_na", state.showNA ? "1" : "0"); render(); };
+$("bankSel").onchange = e => { state.bank = e.target.value; renderTable(); };
+$("naToggle").onclick = () => { state.showNA = !state.showNA; $("naToggle").className = "chip" + (state.showNA ? " on" : ""); renderTable(); };
 
-load().catch(e => {
-  $("sub").textContent = "Could not load.";
-  $("warn").innerHTML = '<div class="warn"><strong>Gmail fetch failed:</strong> ' + esc(e.message) + '</div>';
-  $("tb").innerHTML = '<tr><td colspan="7" class="msg">No data.</td></tr>';
-});
+window.onload = init;
 </script>
 </body>
 </html>
